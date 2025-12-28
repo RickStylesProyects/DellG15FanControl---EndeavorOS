@@ -89,15 +89,28 @@ class ACPIController:
     
     def check_root_privileges(self) -> Tuple[bool, str]:
         """
-        Check if running with root privileges.
+        Check if running with root privileges or passwordless sudo access.
         
         Returns:
             Tuple of (is_root, message)
         """
         if os.geteuid() == 0:
             return True, "Ejecutando como root"
-        else:
-            return False, "Se requieren privilegios de root para controlar los ventiladores"
+        
+        # Check for passwordless sudo access
+        try:
+            # Check using bash because that's what we whitelisted in sudoers
+            result = subprocess.run(
+                ['sudo', '-n', 'bash', '-c', 'true'],
+                capture_output=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                return True, "Acceso root disponible vía sudo"
+            else:
+                return False, "Se requieren privilegios de root (o sudo sin password)"
+        except Exception:
+            return False, "Error verificando privilegios sudo"
     
     def run_checks(self) -> Tuple[bool, list]:
         """
@@ -126,6 +139,7 @@ class ACPIController:
     def _execute_acpi_call(self, command: str) -> Tuple[bool, str]:
         """
         Execute an ACPI call by writing to /proc/acpi/call.
+        Uses sudo if not running as root.
         
         Args:
             command: The ACPI command to execute
@@ -134,13 +148,35 @@ class ACPIController:
             Tuple of (success, result/error message)
         """
         try:
-            # Write the command
-            with open(self.ACPI_CALL_PATH, 'w') as f:
-                f.write(command)
-            
-            # Read the result
-            with open(self.ACPI_CALL_PATH, 'r') as f:
-                result = f.read().strip()
+            if os.geteuid() == 0:
+                # Running as root - direct write
+                with open(self.ACPI_CALL_PATH, 'w') as f:
+                    f.write(command)
+                
+                with open(self.ACPI_CALL_PATH, 'r') as f:
+                    result = f.read().strip()
+            else:
+                # Running as user - use sudo
+                # Write command
+                write_result = subprocess.run(
+                    ['sudo', 'bash', '-c', f'echo "{command}" > {self.ACPI_CALL_PATH}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                if write_result.returncode != 0:
+                    return False, f"Error writing ACPI command: {write_result.stderr}"
+                
+                # Read result
+                read_result = subprocess.run(
+                    ['sudo', 'cat', self.ACPI_CALL_PATH],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                result = read_result.stdout.strip()
             
             # Check for errors
             if result.startswith("Error") or "not found" in result.lower():
@@ -148,8 +184,10 @@ class ACPIController:
             
             return True, result
             
+        except subprocess.TimeoutExpired:
+            return False, "Timeout ejecutando comando ACPI"
         except PermissionError:
-            return False, "Error de permisos. Ejecuta la aplicación como root."
+            return False, "Error de permisos. Configura sudoers o ejecuta como root."
         except FileNotFoundError:
             return False, f"No se encontró {self.ACPI_CALL_PATH}"
         except Exception as e:
@@ -273,6 +311,7 @@ class ACPIController:
     def set_cpu_governor(self, governor: str) -> Tuple[bool, str]:
         """
         Set the CPU frequency governor.
+        Uses sudo if not running as root.
         
         Args:
             governor: One of 'performance', 'powersave', 'schedutil', etc.
@@ -286,17 +325,30 @@ class ACPIController:
             return False, f"Gobernador inválido. Opciones: {', '.join(valid_governors)}"
         
         try:
-            # Find all CPU governors
-            cpu_dirs = Path("/sys/devices/system/cpu").glob("cpu[0-9]*")
-            
-            for cpu_dir in cpu_dirs:
-                governor_path = cpu_dir / "cpufreq" / "scaling_governor"
-                if governor_path.exists():
-                    with open(governor_path, 'w') as f:
-                        f.write(governor)
+            if os.geteuid() == 0:
+                # Running as root - direct write
+                cpu_dirs = Path("/sys/devices/system/cpu").glob("cpu[0-9]*")
+                for cpu_dir in cpu_dirs:
+                    governor_path = cpu_dir / "cpufreq" / "scaling_governor"
+                    if governor_path.exists():
+                        with open(governor_path, 'w') as f:
+                            f.write(governor)
+            else:
+                # Running as user - use sudo
+                result = subprocess.run(
+                    ['sudo', 'bash', '-c', 
+                     f'echo {governor} | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode != 0:
+                    return False, f"Error: {result.stderr}"
             
             return True, f"Gobernador CPU establecido a: {governor}"
             
+        except subprocess.TimeoutExpired:
+            return False, "Timeout cambiando gobernador CPU"
         except PermissionError:
             return False, "Error de permisos al cambiar el gobernador CPU"
         except Exception as e:

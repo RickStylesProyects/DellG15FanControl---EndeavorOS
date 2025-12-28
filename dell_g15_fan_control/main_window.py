@@ -118,7 +118,9 @@ class MainWindow(QMainWindow):
         )
         
         self._current_mode: str = self.config_manager.get("default_mode", "balanced")
-        self._is_root: bool = os.geteuid() == 0
+        # Check for root or sudo access
+        is_root, _ = self.acpi_controller.check_root_privileges()
+        self._is_root: bool = is_root
         
         # Setup UI
         self._setup_ui()
