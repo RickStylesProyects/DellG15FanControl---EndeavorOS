@@ -109,12 +109,11 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 LAUNCHER_SCRIPT="/usr/local/bin/dell-g15-fan-control-gui"
 cat > "$LAUNCHER_SCRIPT" <<LAUNCHEREOF
 #!/bin/bash
+# Dell G15 Fan Control GUI Launcher
+# Runs as normal user - ACPI calls use sudo internally
+
 SCRIPT_DIR="$SCRIPT_DIR"
-export DISPLAY="\${DISPLAY:-:0}"
-export XAUTHORITY="\${XAUTHORITY:-\$HOME/.Xauthority}"
-export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
-[ -n "\$WAYLAND_DISPLAY" ] && export QT_QPA_PLATFORM=wayland
-sudo -E /usr/bin/python3 "\$SCRIPT_DIR/g15_fan_control.py" "\$@"
+exec /usr/bin/python3 "\$SCRIPT_DIR/g15_fan_control.py" "\$@"
 LAUNCHEREOF
 chmod +x "$LAUNCHER_SCRIPT"
 
@@ -182,10 +181,11 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 SUDOERS_FILE="/etc/sudoers.d/dell-g15-fan-control"
 
 cat > "$SUDOERS_FILE" <<EOF
-# Dell G15 Fan Control - Allow passwordless execution with environment
-# SETENV allows sudo -E to preserve DISPLAY and other GUI variables
-$ACTUAL_USER ALL=(root) NOPASSWD:SETENV: /usr/bin/python3 $SCRIPT_DIR/g15_fan_control.py
-$ACTUAL_USER ALL=(root) NOPASSWD:SETENV: /usr/bin/python3 $SCRIPT_DIR/g15_fan_control.py *
+# Dell G15 Fan Control - Allow passwordless ACPI and CPU governor access
+# For bash commands used by the Python app
+$ACTUAL_USER ALL=(root) NOPASSWD: /usr/bin/bash -c *
+$ACTUAL_USER ALL=(root) NOPASSWD: /usr/bin/cat /proc/acpi/call
+$ACTUAL_USER ALL=(root) NOPASSWD: /usr/bin/tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 EOF
 
 chmod 440 "$SUDOERS_FILE"
